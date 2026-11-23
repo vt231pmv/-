@@ -3,6 +3,7 @@
 namespace App\Controller;
 
 use App\Entity\Payment;
+use App\Entity\User;
 use App\Repository\CreditRepository;
 use App\Repository\PaymentRepository;
 use App\Service\PaginationService;
@@ -20,7 +21,15 @@ class PaymentController extends AbstractController
     #[Route('', name: 'list', methods: [Request::METHOD_GET])]
     public function list(Request $request, PaymentRepository $repository, PaginationService $paginationService): JsonResponse
     {
-        $qb = $repository->getFilteredQueryBuilder($request->query->all());
+        $filters = $request->query->all();
+
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client') {
+            $filters['clientId'] = $user->getClientId();
+        }
+
+        $qb = $repository->getFilteredQueryBuilder($filters);
         $result = $paginationService->paginate($qb, $request);
 
         return new JsonResponse($result, Response::HTTP_OK);
@@ -34,12 +43,27 @@ class PaymentController extends AbstractController
             return new JsonResponse(['error' => 'Платіж не знайдено'], Response::HTTP_NOT_FOUND);
         }
 
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client') {
+            $credit = $payment->getCredit();
+            if ($credit->getClient()->getId() !== $user->getClientId()) {
+                return new JsonResponse(['error' => 'Доступ заборонено'], Response::HTTP_FORBIDDEN);
+            }
+        }
+
         return new JsonResponse(['data' => $payment->toArray()], Response::HTTP_OK);
     }
 
     #[Route('', name: 'create', methods: [Request::METHOD_POST])]
     public function create(Request $request, CreditRepository $creditRepo, EntityManagerInterface $em): JsonResponse
     {
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client') {
+            return new JsonResponse(['error' => 'Доступ заборонено. Тільки менеджер або адміністратор може реєструвати платежі'], Response::HTTP_FORBIDDEN);
+        }
+
         $body = json_decode($request->getContent(), true) ?? [];
 
         if (empty($body['creditId']) || empty($body['amount'])) {
@@ -62,7 +86,6 @@ class PaymentController extends AbstractController
             ->setStatus($body['status'] ?? 'completed')
             ->setPaymentDate(!empty($body['paymentDate']) ? new \DateTime($body['paymentDate']) : new \DateTime());
 
-        // Оновлення залишку боргу по кредиту
         $newRemaining = max(0, (float)$credit->getRemainingAmount() - (float)$paymentAmount);
         $credit->setRemainingAmount((string)$newRemaining);
         if ($newRemaining == 0) {
@@ -73,7 +96,7 @@ class PaymentController extends AbstractController
         $em->flush();
 
         return new JsonResponse([
-            'data' => $payment->toArray(),
+            'data'    => $payment->toArray(),
             'message' => 'Платіж успішно проведено'
         ], Response::HTTP_CREATED);
     }
@@ -81,6 +104,12 @@ class PaymentController extends AbstractController
     #[Route('/{id}', name: 'update', methods: [Request::METHOD_PUT, Request::METHOD_PATCH])]
     public function update(int $id, Request $request, PaymentRepository $repository, EntityManagerInterface $em): JsonResponse
     {
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client') {
+            return new JsonResponse(['error' => 'Доступ заборонено. Тільки менеджер або адміністратор може оновлювати платежі'], Response::HTTP_FORBIDDEN);
+        }
+
         $payment = $repository->find($id);
         if (!$payment) {
             return new JsonResponse(['error' => 'Платіж не знайдено'], Response::HTTP_NOT_FOUND);
@@ -88,14 +117,14 @@ class PaymentController extends AbstractController
 
         $body = json_decode($request->getContent(), true) ?? [];
 
-        if (isset($body['amount'])) $payment->setAmount((string)$body['amount']);
+        if (isset($body['amount']))        $payment->setAmount((string)$body['amount']);
         if (isset($body['paymentMethod'])) $payment->setPaymentMethod($body['paymentMethod']);
-        if (isset($body['status'])) $payment->setStatus($body['status']);
+        if (isset($body['status']))        $payment->setStatus($body['status']);
 
         $em->flush();
 
         return new JsonResponse([
-            'data' => $payment->toArray(),
+            'data'    => $payment->toArray(),
             'message' => 'Дані платежу успішно оновлено'
         ], Response::HTTP_OK);
     }
@@ -103,6 +132,12 @@ class PaymentController extends AbstractController
     #[Route('/{id}', name: 'delete', methods: [Request::METHOD_DELETE])]
     public function delete(int $id, PaymentRepository $repository, EntityManagerInterface $em): JsonResponse
     {
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() !== 'admin') {
+            return new JsonResponse(['error' => 'Доступ заборонено. Тільки адміністратор може видаляти платежі'], Response::HTTP_FORBIDDEN);
+        }
+
         $payment = $repository->find($id);
         if (!$payment) {
             return new JsonResponse(['error' => 'Платіж не знайдено'], Response::HTTP_NOT_FOUND);
@@ -112,9 +147,7 @@ class PaymentController extends AbstractController
             $em->remove($payment);
             $em->flush();
         } catch (ForeignKeyConstraintViolationException $e) {
-            return new JsonResponse([
-                'error' => 'Неможливо видалити платіж через обмеження зовнішнього ключа'
-            ], Response::HTTP_CONFLICT);
+            return new JsonResponse(['error' => 'Неможливо видалити платіж через обмеження зовнішнього ключа'], Response::HTTP_CONFLICT);
         }
 
         return new JsonResponse(['message' => 'Платіж успішно видалено'], Response::HTTP_OK);

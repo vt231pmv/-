@@ -284,6 +284,97 @@ php artisan serve
 
 ---
 
+## Лабораторна робота №5: Автентифікація через JWT та авторизація ролей (RBAC)
+
+У обох фреймворках реалізовано:
+1. **JWT-автентифікація**:
+   - **Symfony 6.4**: `lexik/jwt-authentication-bundle` (RSA-ключі).
+   - **Laravel 11**: `php-open-source-saver/jwt-auth`.
+2. **Три рівні доступу (RBAC)**:
+   - `Client` — доступ лише до своїх власних даних (клієнт, рахунки, кредити, виплати). Створення/оновлення/видалення заборонено (403 Forbidden).
+   - `Manager` — перегляд усіх записів, створення та редагування (POST, PUT/PATCH) сутностей. Видалення заборонено (403 Forbidden).
+   - `Admin` — повний доступ (перегляд, створення, редагування, видалення DELETE).
+
+### Матриця прав доступу
+
+| Ендпоінт / Дія | Client | Manager | Admin |
+|---|:---:|:---:|:---:|
+| `POST /api/auth/register` | Публічний | Публічний | Публічний |
+| `POST /api/auth/login` | Публічний | Публічний | Публічний |
+| `GET /api/auth/me` | Свій профіль | Свій профіль | Свій профіль |
+| `GET /api/{entities}` (список) | Лише свої дані | Всі записи | Всі записи |
+| `GET /api/{entities}/{id}` | Лише свій запис | Будь-який запис | Будь-який запис |
+| `POST /api/{entities}` (створення) | ❌ 403 Forbidden | ✅ Дозволено | ✅ Дозволено |
+| `PUT/PATCH /api/{entities}/{id}` (оновлення) | ❌ 403 Forbidden | ✅ Дозволено | ✅ Дозволено |
+| `DELETE /api/{entities}/{id}` (видалення) | ❌ 403 Forbidden | ❌ 403 Forbidden | ✅ Дозволено |
+
+*Примітка: для сутності `credit-types` (довідник програм) перегляд доступний усім ролям.*
+
+---
+
+### Тестові облікові записи (в обох системах)
+
+| Email | Пароль | Роль | Прив'язка |
+|---|---|---|---|
+| `admin@bank.com` | `admin123` | `admin` | — |
+| `manager@bank.com` | `manager123` | `manager` | — |
+| `client@bank.com` | `client123` | `client` | `client_id = 1` |
+
+---
+
+### Команди для налаштування та сідингу користувачів
+
+#### Symfony 6.4:
+```bash
+cd symfony
+
+# Генерація пари ключів JWT (якщо відсутні)
+php bin/console lexik:jwt:generate-keypair --skip-if-exists
+
+# Оновлення структури бази даних (додавання таблиці users)
+php bin/console doctrine:schema:update --force
+
+# Створення тестових користувачів
+php bin/console app:seed-users
+```
+
+#### Laravel 11:
+```bash
+cd laravel
+
+# Генерація секретного ключа JWT
+php artisan jwt:secret
+
+# Виконання міграції (додавання полів role та client_id)
+php artisan migrate
+
+# Створення тестових користувачів
+php artisan db:seed --class=UserSeeder
+```
+
+---
+
+### Приклад авторизованого запиту
+
+1. Отримання токена:
+```bash
+POST /api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@bank.com",
+  "password": "admin123"
+}
+```
+
+2. Виклик захищеного API:
+```bash
+GET /api/clients
+Authorization: Bearer <your_jwt_token>
+```
+
+---
+
 ## Налаштування Xdebug
 - Версія: **Xdebug v3.3.2**
 - `xdebug.mode = debug,develop`

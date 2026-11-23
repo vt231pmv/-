@@ -3,6 +3,7 @@
 namespace App\Controller;
 
 use App\Entity\Client;
+use App\Entity\User;
 use App\Repository\ClientRepository;
 use App\Service\PaginationService;
 use Doctrine\DBAL\Exception\ForeignKeyConstraintViolationException;
@@ -19,7 +20,15 @@ class ClientController extends AbstractController
     #[Route('', name: 'list', methods: [Request::METHOD_GET])]
     public function list(Request $request, ClientRepository $repository, PaginationService $paginationService): JsonResponse
     {
-        $qb = $repository->getFilteredQueryBuilder($request->query->all());
+        $filters = $request->query->all();
+
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client') {
+            $filters['id'] = $user->getClientId();
+        }
+
+        $qb = $repository->getFilteredQueryBuilder($filters);
         $result = $paginationService->paginate($qb, $request);
 
         return new JsonResponse($result, Response::HTTP_OK);
@@ -28,6 +37,12 @@ class ClientController extends AbstractController
     #[Route('/{id}', name: 'show', methods: [Request::METHOD_GET])]
     public function show(int $id, ClientRepository $repository): JsonResponse
     {
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client' && $user->getClientId() !== $id) {
+            return new JsonResponse(['error' => 'Доступ заборонено'], Response::HTTP_FORBIDDEN);
+        }
+
         $client = $repository->find($id);
         if (!$client) {
             return new JsonResponse(['error' => 'Клієнта не знайдено'], Response::HTTP_NOT_FOUND);
@@ -39,6 +54,12 @@ class ClientController extends AbstractController
     #[Route('', name: 'create', methods: [Request::METHOD_POST])]
     public function create(Request $request, ClientRepository $repository, EntityManagerInterface $em): JsonResponse
     {
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client') {
+            return new JsonResponse(['error' => 'Доступ заборонено. Тільки менеджер або адміністратор може створювати клієнтів'], Response::HTTP_FORBIDDEN);
+        }
+
         $body = json_decode($request->getContent(), true) ?? [];
 
         if (empty($body['firstName']) || empty($body['lastName']) || empty($body['email']) || empty($body['phone']) || empty($body['taxId'])) {
@@ -47,7 +68,6 @@ class ClientController extends AbstractController
             ], Response::HTTP_BAD_REQUEST);
         }
 
-        // Перевірка унікальності email
         if ($repository->findOneBy(['email' => $body['email']])) {
             return new JsonResponse([
                 'error' => 'Клієнт із такою електронною поштою вже існує',
@@ -55,7 +75,6 @@ class ClientController extends AbstractController
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
-        // Перевірка унікальності taxId (ІПН)
         if ($repository->findOneBy(['taxId' => $body['taxId']])) {
             return new JsonResponse([
                 'error' => 'Клієнт із таким податковим номером (taxId) вже існує',
@@ -74,7 +93,7 @@ class ClientController extends AbstractController
         $em->flush();
 
         return new JsonResponse([
-            'data' => $client->toArray(),
+            'data'    => $client->toArray(),
             'message' => 'Клієнта успішно створено'
         ], Response::HTTP_CREATED);
     }
@@ -82,6 +101,12 @@ class ClientController extends AbstractController
     #[Route('/{id}', name: 'update', methods: [Request::METHOD_PUT, Request::METHOD_PATCH])]
     public function update(int $id, Request $request, ClientRepository $repository, EntityManagerInterface $em): JsonResponse
     {
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client') {
+            return new JsonResponse(['error' => 'Доступ заборонено. Тільки менеджер або адміністратор може оновлювати клієнтів'], Response::HTTP_FORBIDDEN);
+        }
+
         $client = $repository->find($id);
         if (!$client) {
             return new JsonResponse(['error' => 'Клієнта не знайдено'], Response::HTTP_NOT_FOUND);
@@ -89,7 +114,6 @@ class ClientController extends AbstractController
 
         $body = json_decode($request->getContent(), true) ?? [];
 
-        // Перевірка унікальності email при зміні
         if (isset($body['email']) && $body['email'] !== $client->getEmail()) {
             if ($repository->findOneBy(['email' => $body['email']])) {
                 return new JsonResponse([
@@ -100,7 +124,6 @@ class ClientController extends AbstractController
             $client->setEmail($body['email']);
         }
 
-        // Перевірка унікальності taxId при зміні
         if (isset($body['taxId']) && $body['taxId'] !== $client->getTaxId()) {
             if ($repository->findOneBy(['taxId' => $body['taxId']])) {
                 return new JsonResponse([
@@ -112,13 +135,13 @@ class ClientController extends AbstractController
         }
 
         if (isset($body['firstName'])) $client->setFirstName($body['firstName']);
-        if (isset($body['lastName'])) $client->setLastName($body['lastName']);
-        if (isset($body['phone'])) $client->setPhone($body['phone']);
+        if (isset($body['lastName']))  $client->setLastName($body['lastName']);
+        if (isset($body['phone']))     $client->setPhone($body['phone']);
 
         $em->flush();
 
         return new JsonResponse([
-            'data' => $client->toArray(),
+            'data'    => $client->toArray(),
             'message' => 'Дані клієнта успішно оновлено'
         ], Response::HTTP_OK);
     }
@@ -126,6 +149,12 @@ class ClientController extends AbstractController
     #[Route('/{id}', name: 'delete', methods: [Request::METHOD_DELETE])]
     public function delete(int $id, ClientRepository $repository, EntityManagerInterface $em): JsonResponse
     {
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() !== 'admin') {
+            return new JsonResponse(['error' => 'Доступ заборонено. Тільки адміністратор може видаляти клієнтів'], Response::HTTP_FORBIDDEN);
+        }
+
         $client = $repository->find($id);
         if (!$client) {
             return new JsonResponse(['error' => 'Клієнта не знайдено'], Response::HTTP_NOT_FOUND);

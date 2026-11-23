@@ -3,6 +3,7 @@
 namespace App\Controller;
 
 use App\Entity\BankAccount;
+use App\Entity\User;
 use App\Repository\BankAccountRepository;
 use App\Repository\ClientRepository;
 use App\Service\PaginationService;
@@ -20,7 +21,15 @@ class BankAccountController extends AbstractController
     #[Route('', name: 'list', methods: [Request::METHOD_GET])]
     public function list(Request $request, BankAccountRepository $repository, PaginationService $paginationService): JsonResponse
     {
-        $qb = $repository->getFilteredQueryBuilder($request->query->all());
+        $filters = $request->query->all();
+
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client') {
+            $filters['clientId'] = $user->getClientId();
+        }
+
+        $qb = $repository->getFilteredQueryBuilder($filters);
         $result = $paginationService->paginate($qb, $request);
 
         return new JsonResponse($result, Response::HTTP_OK);
@@ -34,12 +43,24 @@ class BankAccountController extends AbstractController
             return new JsonResponse(['error' => 'Банківський рахунок не знайдено'], Response::HTTP_NOT_FOUND);
         }
 
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client' && $account->getClient()->getId() !== $user->getClientId()) {
+            return new JsonResponse(['error' => 'Доступ заборонено'], Response::HTTP_FORBIDDEN);
+        }
+
         return new JsonResponse(['data' => $account->toArray()], Response::HTTP_OK);
     }
 
     #[Route('', name: 'create', methods: [Request::METHOD_POST])]
     public function create(Request $request, BankAccountRepository $repository, ClientRepository $clientRepository, EntityManagerInterface $em): JsonResponse
     {
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client') {
+            return new JsonResponse(['error' => 'Доступ заборонено. Тільки менеджер або адміністратор може створювати рахунки'], Response::HTTP_FORBIDDEN);
+        }
+
         $body = json_decode($request->getContent(), true) ?? [];
 
         if (empty($body['clientId']) || empty($body['accountNumber'])) {
@@ -48,19 +69,16 @@ class BankAccountController extends AbstractController
             ], Response::HTTP_BAD_REQUEST);
         }
 
-        // Перевірка унікальності номеру рахунку
         if ($repository->findOneBy(['accountNumber' => $body['accountNumber']])) {
             return new JsonResponse([
-                'error' => 'Банківський рахунок із таким номером вже існує',
+                'error'  => 'Банківський рахунок із таким номером вже існує',
                 'errors' => ['accountNumber' => 'Поле accountNumber має бути унікальним']
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
         $client = $clientRepository->find($body['clientId']);
         if (!$client) {
-            return new JsonResponse([
-                'error' => 'Клієнта з ID ' . $body['clientId'] . ' не знайдено'
-            ], Response::HTTP_NOT_FOUND);
+            return new JsonResponse(['error' => 'Клієнта з ID ' . $body['clientId'] . ' не знайдено'], Response::HTTP_NOT_FOUND);
         }
 
         $account = new BankAccount();
@@ -74,7 +92,7 @@ class BankAccountController extends AbstractController
         $em->flush();
 
         return new JsonResponse([
-            'data' => $account->toArray(),
+            'data'    => $account->toArray(),
             'message' => 'Банківський рахунок успішно створено'
         ], Response::HTTP_CREATED);
     }
@@ -82,6 +100,12 @@ class BankAccountController extends AbstractController
     #[Route('/{id}', name: 'update', methods: [Request::METHOD_PUT, Request::METHOD_PATCH])]
     public function update(int $id, Request $request, BankAccountRepository $repository, EntityManagerInterface $em): JsonResponse
     {
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client') {
+            return new JsonResponse(['error' => 'Доступ заборонено. Тільки менеджер або адміністратор може оновлювати рахунки'], Response::HTTP_FORBIDDEN);
+        }
+
         $account = $repository->find($id);
         if (!$account) {
             return new JsonResponse(['error' => 'Банківський рахунок не знайдено'], Response::HTTP_NOT_FOUND);
@@ -89,25 +113,24 @@ class BankAccountController extends AbstractController
 
         $body = json_decode($request->getContent(), true) ?? [];
 
-        // Перевірка унікальності accountNumber при зміні
         if (isset($body['accountNumber']) && $body['accountNumber'] !== $account->getAccountNumber()) {
             if ($repository->findOneBy(['accountNumber' => $body['accountNumber']])) {
                 return new JsonResponse([
-                    'error' => 'Банківський рахунок із таким номером вже існує',
+                    'error'  => 'Банківський рахунок із таким номером вже існує',
                     'errors' => ['accountNumber' => 'Поле accountNumber має бути унікальним']
                 ], Response::HTTP_UNPROCESSABLE_ENTITY);
             }
             $account->setAccountNumber($body['accountNumber']);
         }
 
-        if (isset($body['balance'])) $account->setBalance((string)$body['balance']);
+        if (isset($body['balance']))  $account->setBalance((string)$body['balance']);
         if (isset($body['currency'])) $account->setCurrency($body['currency']);
-        if (isset($body['status'])) $account->setStatus($body['status']);
+        if (isset($body['status']))   $account->setStatus($body['status']);
 
         $em->flush();
 
         return new JsonResponse([
-            'data' => $account->toArray(),
+            'data'    => $account->toArray(),
             'message' => 'Банківський рахунок успішно оновлено'
         ], Response::HTTP_OK);
     }
@@ -115,12 +138,17 @@ class BankAccountController extends AbstractController
     #[Route('/{id}', name: 'delete', methods: [Request::METHOD_DELETE])]
     public function delete(int $id, BankAccountRepository $repository, EntityManagerInterface $em): JsonResponse
     {
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() !== 'admin') {
+            return new JsonResponse(['error' => 'Доступ заборонено. Тільки адміністратор може видаляти рахунки'], Response::HTTP_FORBIDDEN);
+        }
+
         $account = $repository->find($id);
         if (!$account) {
             return new JsonResponse(['error' => 'Банківський рахунок не знайдено'], Response::HTTP_NOT_FOUND);
         }
 
-        // Перевірка на наявність прив'язаних кредитів перед видаленням
         if ($account->getCredits()->count() > 0) {
             return new JsonResponse([
                 'error' => 'Неможливо видалити банківський рахунок, оскільки до нього прив\'язані оформлені кредити'
@@ -131,9 +159,7 @@ class BankAccountController extends AbstractController
             $em->remove($account);
             $em->flush();
         } catch (ForeignKeyConstraintViolationException $e) {
-            return new JsonResponse([
-                'error' => 'Неможливо видалити рахунок через обмеження зовнішнього ключа'
-            ], Response::HTTP_CONFLICT);
+            return new JsonResponse(['error' => 'Неможливо видалити рахунок через обмеження зовнішнього ключа'], Response::HTTP_CONFLICT);
         }
 
         return new JsonResponse(['message' => 'Банківський рахунок успішно видалено'], Response::HTTP_OK);

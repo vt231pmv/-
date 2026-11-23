@@ -3,6 +3,7 @@
 namespace App\Controller;
 
 use App\Entity\Credit;
+use App\Entity\User;
 use App\Repository\BankAccountRepository;
 use App\Repository\ClientRepository;
 use App\Repository\CreditRepository;
@@ -22,7 +23,15 @@ class CreditController extends AbstractController
     #[Route('', name: 'list', methods: [Request::METHOD_GET])]
     public function list(Request $request, CreditRepository $repository, PaginationService $paginationService): JsonResponse
     {
-        $qb = $repository->getFilteredQueryBuilder($request->query->all());
+        $filters = $request->query->all();
+
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client') {
+            $filters['clientId'] = $user->getClientId();
+        }
+
+        $qb = $repository->getFilteredQueryBuilder($filters);
         $result = $paginationService->paginate($qb, $request);
 
         return new JsonResponse($result, Response::HTTP_OK);
@@ -36,6 +45,12 @@ class CreditController extends AbstractController
             return new JsonResponse(['error' => 'Кредит не знайдено'], Response::HTTP_NOT_FOUND);
         }
 
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client' && $credit->getClient()->getId() !== $user->getClientId()) {
+            return new JsonResponse(['error' => 'Доступ заборонено'], Response::HTTP_FORBIDDEN);
+        }
+
         return new JsonResponse(['data' => $credit->toArray()], Response::HTTP_OK);
     }
 
@@ -47,6 +62,12 @@ class CreditController extends AbstractController
         CreditTypeRepository $creditTypeRepo,
         EntityManagerInterface $em
     ): JsonResponse {
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client') {
+            return new JsonResponse(['error' => 'Доступ заборонено. Тільки менеджер або адміністратор може оформлювати кредити'], Response::HTTP_FORBIDDEN);
+        }
+
         $body = json_decode($request->getContent(), true) ?? [];
 
         if (empty($body['clientId']) || empty($body['bankAccountId']) || empty($body['creditTypeId']) || empty($body['amount'])) {
@@ -72,7 +93,6 @@ class CreditController extends AbstractController
 
         $amount = (string)$body['amount'];
         $termMonths = (int)($body['termMonths'] ?? $creditType->getTermMonths() ?? 12);
-
         $startDate = !empty($body['startDate']) ? new \DateTime($body['startDate']) : new \DateTime();
         $endDate = (clone $startDate)->modify("+{$termMonths} months");
 
@@ -90,7 +110,7 @@ class CreditController extends AbstractController
         $em->flush();
 
         return new JsonResponse([
-            'data' => $credit->toArray(),
+            'data'    => $credit->toArray(),
             'message' => 'Кредит успішно оформлено'
         ], Response::HTTP_CREATED);
     }
@@ -98,6 +118,12 @@ class CreditController extends AbstractController
     #[Route('/{id}', name: 'update', methods: [Request::METHOD_PUT, Request::METHOD_PATCH])]
     public function update(int $id, Request $request, CreditRepository $repository, EntityManagerInterface $em): JsonResponse
     {
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() === 'client') {
+            return new JsonResponse(['error' => 'Доступ заборонено. Тільки менеджер або адміністратор може оновлювати кредити'], Response::HTTP_FORBIDDEN);
+        }
+
         $credit = $repository->find($id);
         if (!$credit) {
             return new JsonResponse(['error' => 'Кредит не знайдено'], Response::HTTP_NOT_FOUND);
@@ -106,13 +132,13 @@ class CreditController extends AbstractController
         $body = json_decode($request->getContent(), true) ?? [];
 
         if (isset($body['remainingAmount'])) $credit->setRemainingAmount((string)$body['remainingAmount']);
-        if (isset($body['status'])) $credit->setStatus($body['status']);
-        if (isset($body['amount'])) $credit->setAmount((string)$body['amount']);
+        if (isset($body['status']))          $credit->setStatus($body['status']);
+        if (isset($body['amount']))          $credit->setAmount((string)$body['amount']);
 
         $em->flush();
 
         return new JsonResponse([
-            'data' => $credit->toArray(),
+            'data'    => $credit->toArray(),
             'message' => 'Дані кредиту успішно оновлено'
         ], Response::HTTP_OK);
     }
@@ -120,6 +146,12 @@ class CreditController extends AbstractController
     #[Route('/{id}', name: 'delete', methods: [Request::METHOD_DELETE])]
     public function delete(int $id, CreditRepository $repository, EntityManagerInterface $em): JsonResponse
     {
+        /** @var User $user */
+        $user = $this->getUser();
+        if ($user && $user->getRole() !== 'admin') {
+            return new JsonResponse(['error' => 'Доступ заборонено. Тільки адміністратор може видаляти кредити'], Response::HTTP_FORBIDDEN);
+        }
+
         $credit = $repository->find($id);
         if (!$credit) {
             return new JsonResponse(['error' => 'Кредит не знайдено'], Response::HTTP_NOT_FOUND);
@@ -129,9 +161,7 @@ class CreditController extends AbstractController
             $em->remove($credit);
             $em->flush();
         } catch (ForeignKeyConstraintViolationException $e) {
-            return new JsonResponse([
-                'error' => 'Неможливо видалити кредит через обмеження зовнішнього ключа'
-            ], Response::HTTP_CONFLICT);
+            return new JsonResponse(['error' => 'Неможливо видалити кредит через обмеження зовнішнього ключа'], Response::HTTP_CONFLICT);
         }
 
         return new JsonResponse(['message' => 'Кредит успішно видалено'], Response::HTTP_OK);

@@ -4,18 +4,28 @@ namespace App\Http\Controllers;
 
 use App\Models\Credit;
 use App\Models\CreditType;
+use App\Models\User;
 use App\Services\PaginationService;
 use Carbon\Carbon;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Symfony\Component\HttpFoundation\Response;
 
 class CreditController extends Controller
 {
     public function index(Request $request, PaginationService $paginationService): JsonResponse
     {
-        $query = Credit::filter($request->query())->with(['client', 'bankAccount', 'creditType']);
+        $filters = $request->all();
+
+        /** @var User|null $user */
+        $user = Auth::user();
+        if ($user && $user->role === 'client' && $user->client_id) {
+            $filters['client_id'] = $user->client_id;
+        }
+
+        $query = Credit::filter($filters)->with(['client', 'bankAccount', 'creditType']);
         $result = $paginationService->paginate($query, $request);
 
         return response()->json($result, Response::HTTP_OK);
@@ -27,6 +37,12 @@ class CreditController extends Controller
 
         if (!$credit) {
             return response()->json(['error' => 'Кредит не знайдено'], Response::HTTP_NOT_FOUND);
+        }
+
+        /** @var User|null $user */
+        $user = Auth::user();
+        if ($user && $user->role === 'client' && $user->client_id && (int)$credit->client_id !== (int)$user->client_id) {
+            return response()->json(['error' => 'Доступ заборонено'], Response::HTTP_FORBIDDEN);
         }
 
         return response()->json(['data' => $credit], Response::HTTP_OK);

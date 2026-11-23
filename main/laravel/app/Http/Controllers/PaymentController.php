@@ -4,11 +4,13 @@ namespace App\Http\Controllers;
 
 use App\Models\Credit;
 use App\Models\Payment;
+use App\Models\User;
 use App\Services\PaginationService;
 use Carbon\Carbon;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Symfony\Component\HttpFoundation\Response;
 
 class PaymentController extends Controller
@@ -16,6 +18,15 @@ class PaymentController extends Controller
     public function index(Request $request, PaginationService $paginationService): JsonResponse
     {
         $query = Payment::filter($request->query())->with('credit');
+
+        /** @var User|null $user */
+        $user = Auth::user();
+        if ($user && $user->role === 'client' && $user->client_id) {
+            $query->whereHas('credit', function ($q) use ($user) {
+                $q->where('client_id', $user->client_id);
+            });
+        }
+
         $result = $paginationService->paginate($query, $request);
 
         return response()->json($result, Response::HTTP_OK);
@@ -27,6 +38,14 @@ class PaymentController extends Controller
 
         if (!$payment) {
             return response()->json(['error' => 'Платіж не знайдено'], Response::HTTP_NOT_FOUND);
+        }
+
+        /** @var User|null $user */
+        $user = Auth::user();
+        if ($user && $user->role === 'client' && $user->client_id) {
+            if ((int)$payment->credit->client_id !== (int)$user->client_id) {
+                return response()->json(['error' => 'Доступ заборонено'], Response::HTTP_FORBIDDEN);
+            }
         }
 
         return response()->json(['data' => $payment], Response::HTTP_OK);

@@ -3,17 +3,27 @@
 namespace App\Http\Controllers;
 
 use App\Models\Client;
+use App\Models\User;
 use App\Services\PaginationService;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Symfony\Component\HttpFoundation\Response;
 
 class ClientController extends Controller
 {
     public function index(Request $request, PaginationService $paginationService): JsonResponse
     {
-        $query = Client::filter($request->query())->with(['bankAccounts', 'credits']);
+        $filters = $request->all();
+
+        /** @var User|null $user */
+        $user = Auth::user();
+        if ($user && $user->role === 'client' && $user->client_id) {
+            $filters['id'] = $user->client_id;
+        }
+
+        $query = Client::filter($filters)->with(['bankAccounts', 'credits']);
         $result = $paginationService->paginate($query, $request);
 
         return response()->json($result, Response::HTTP_OK);
@@ -21,6 +31,12 @@ class ClientController extends Controller
 
     public function show(string|int $id): JsonResponse
     {
+        /** @var User|null $user */
+        $user = Auth::user();
+        if ($user && $user->role === 'client' && $user->client_id && (int)$id !== (int)$user->client_id) {
+            return response()->json(['error' => 'Доступ заборонено'], Response::HTTP_FORBIDDEN);
+        }
+
         $client = Client::with(['bankAccounts', 'credits'])->find($id);
 
         if (!$client) {
